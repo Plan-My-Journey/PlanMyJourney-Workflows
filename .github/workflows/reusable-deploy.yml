@@ -31,7 +31,7 @@ jobs:
           path: gitops
       - name: Update image tags
         run: |
-          for chart in frontend ai-service travel-service user-service utility-service; do
+          for chart in frontend ai-service ai-worker travel-service user-service utility-service; do
             for file in values.yaml values-prod.yaml values-dev.yaml; do
               target="gitops/helm-charts/$chart/$file"
               if [ -f "$target" ]; then
@@ -64,7 +64,7 @@ jobs:
     steps:
       - name: Smoke test placeholder
         run: |
-          echo "Run smoke tests against ${{ inputs.environment }} after Flux sync"
+          echo "Run smoke tests against ${{ inputs.environment }} after ArgoCD sync"
           curl -fsS --retry 5 --retry-delay 10 https://api.invest-iq.online/healthz || true
 
   notify:
