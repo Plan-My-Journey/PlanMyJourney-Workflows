@@ -1,0 +1,76 @@
+name: Reusable — Deploy (GitOps)
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+      image_tag:
+        required: true
+        type: string
+      gitops_repo:
+        required: false
+        type: string
+        default: Plan-My-Journey/PlanMyJourney-Gitops
+      overlay_path:
+        required: true
+        type: string
+    secrets:
+      GITOPS_PAT:
+        required: true
+
+jobs:
+  update-gitops:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.gitops_repo }}
+          token: ${{ secrets.GITOPS_PAT }}
+          path: gitops
+      - name: Update image tags
+        run: |
+          for chart in frontend ai-service travel-service user-service utility-service; do
+            for file in values.yaml values-prod.yaml values-dev.yaml; do
+              target="gitops/helm-charts/$chart/$file"
+              if [ -f "$target" ]; then
+                sed -i "s|tag: .*|tag: \"${{ inputs.image_tag }}\"|g" "$target"
+              fi
+            done
+          done
+          deployment="gitops/kustomize/base/deployment.yaml"
+          if [ -f "$deployment" ]; then
+            sed -i "s|:latest|:${{ inputs.image_tag }}|g" "$deployment"
+          fi
+          for svc in ai-service travel-service utility-service; do
+            svc_deploy="gitops/kustomize/base/services/$svc/deployment.yaml"
+            if [ -f "$svc_deploy" ]; then
+              sed -i "s|:latest|:${{ inputs.image_tag }}|g" "$svc_deploy"
+            fi
+          done
+      - name: Commit GitOps changes
+        working-directory: gitops
+        run: |
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git add .
+          git diff --staged --quiet || git commit -m "deploy(${{ inputs.environment }}): image tag ${{ inputs.image_tag }}"
+          git push
+
+  smoke-test:
+    runs-on: ubuntu-latest
+    needs: [update-gitops]
+    steps:
+      - name: Smoke test placeholder
+        run: |
+          echo "Run smoke tests against ${{ inputs.environment }} after Flux sync"
+          curl -fsS --retry 5 --retry-delay 10 https://api.invest-iq.online/healthz || true
+
+  notify:
+    runs-on: ubuntu-latest
+    needs: [update-gitops, smoke-test]
+    if: always()
+    steps:
+      - run: |
+          echo "Deploy ${{ inputs.environment }} finished with status: ${{ job.status }}"
