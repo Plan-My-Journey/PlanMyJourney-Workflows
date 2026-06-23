@@ -22,9 +22,11 @@ jobs:
           fetch-depth: 0
 
       - name: Gitleaks secrets scan
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz \
+            | tar -xz gitleaks
+          ./gitleaks detect --source . --log-opts="HEAD~1..HEAD" --redact --verbose
 
       - name: Set up Python
         if: inputs.runtime == 'python'
