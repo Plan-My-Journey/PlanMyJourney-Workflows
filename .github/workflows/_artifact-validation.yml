@@ -78,7 +78,7 @@ jobs:
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN_DEV }}
-          aws-region: ${{ vars.AWS_REGION }}
+          aws-region: ${{ vars.AWS_REGION != '' && vars.AWS_REGION || 'us-east-1' }}
 
       - name: A — Verify container image exists in ECR
         if: inputs.artifact-type == 'container'
@@ -139,7 +139,7 @@ jobs:
       - name: C/D — Verify dev ArgoCD application is Synced and Healthy
         if: inputs.artifact-type == 'container'
         env:
-          ARGOCD_SERVER: ${{ vars.ARGOCD_SERVER }}
+          ARGOCD_SERVER: ${{ vars.ARGOCD_SERVER || 'argocd.invest-iq.online' }}
           ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
           APP: ${{ inputs.argocd-app-name }}
         run: |

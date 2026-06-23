@@ -36,7 +36,7 @@ jobs:
 
       - name: Sync ArgoCD application
         env:
-          ARGOCD_SERVER: ${{ vars.ARGOCD_SERVER }}
+          ARGOCD_SERVER: ${{ vars.ARGOCD_SERVER || 'argocd.invest-iq.online' }}
           ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
           PRIMARY: ${{ inputs.app-name }}
           EXTRA: ${{ inputs.additional-apps }}
