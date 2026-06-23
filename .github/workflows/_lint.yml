@@ -1,0 +1,56 @@
+name: Reusable - Lint & Secrets Scan
+
+on:
+  workflow_call:
+    inputs:
+      service-path:
+        description: Path to the service directory
+        required: true
+        type: string
+      runtime:
+        description: python | node | static
+        required: false
+        default: python
+        type: string
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Gitleaks secrets scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Set up Python
+        if: inputs.runtime == 'python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Ruff lint
+        if: inputs.runtime == 'python'
+        run: |
+          pip install ruff
+          ruff check "${{ inputs.service-path }}"
+
+      - name: Node typecheck
+        if: inputs.runtime == 'node'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: npm ci and typecheck
+        if: inputs.runtime == 'node'
+        working-directory: frontend
+        run: npm ci && npm run typecheck
+
+      - name: Static assets sanity
+        if: inputs.runtime == 'static'
+        run: test -f "${{ inputs.service-path }}/index.html"

@@ -1,0 +1,77 @@
+name: Reusable - Frontend S3 Promote
+
+on:
+  workflow_call:
+    inputs:
+      source-bucket:
+        required: true
+        type: string
+      destination-bucket:
+        required: true
+        type: string
+      cloudfront-distribution-id:
+        required: true
+        type: string
+    secrets:
+      AWS_DEPLOY_ROLE_ARN_DEV:
+        required: true
+      AWS_DEPLOY_ROLE_ARN_PROD:
+        required: true
+    outputs:
+      artifact-tag:
+        description: Promoted static artifact tag
+        value: ${{ jobs.promote.outputs.artifact-tag }}
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    environment: production
+    outputs:
+      artifact-tag: ${{ steps.resolve.outputs.artifact-tag }}
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN_DEV }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Resolve validated dev artifact tag
+        id: resolve
+        env:
+          BUCKET: ${{ inputs.source-bucket }}
+        run: |
+          set -euo pipefail
+          aws s3 cp "s3://${BUCKET}/.deployments/active.json" active.json
+          TAG="$(jq -r '.artifact_tag' active.json)"
+          if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
+            echo "::error::No active artifact tag found in s3://${BUCKET}/.deployments/active.json"
+            exit 1
+          fi
+          aws s3 ls "s3://${BUCKET}/artifacts/${TAG}/index.html" >/dev/null
+          echo "artifact-tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Promoting static artifact ${TAG}"
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN_PROD }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Promote static artifact to production bucket
+        env:
+          SOURCE: ${{ inputs.source-bucket }}
+          DEST: ${{ inputs.destination-bucket }}
+          TAG: ${{ steps.resolve.outputs.artifact-tag }}
+        run: |
+          set -euo pipefail
+          aws s3 sync "s3://${SOURCE}/artifacts/${TAG}/" "s3://${DEST}/" --delete
+          aws s3 cp "s3://${SOURCE}/.deployments/${TAG}.json" "s3://${DEST}/.deployments/${TAG}.json"
+          aws s3 cp "s3://${SOURCE}/.deployments/${TAG}.json" "s3://${DEST}/.deployments/active.json"
+
+      - name: Invalidate CloudFront cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id "${{ inputs.cloudfront-distribution-id }}" \
+            --paths "/*"

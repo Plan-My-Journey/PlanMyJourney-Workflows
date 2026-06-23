@@ -1,0 +1,58 @@
+name: Reusable - ArgoCD Sync
+
+on:
+  workflow_call:
+    inputs:
+      deploy-environment:
+        description: dev or prod
+        required: true
+        type: string
+      app-name:
+        description: Primary ArgoCD Application name to sync
+        required: true
+        type: string
+      additional-apps:
+        description: Comma-separated additional ArgoCD apps to sync
+        required: false
+        default: ""
+        type: string
+    secrets:
+      ARGOCD_AUTH_TOKEN:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.deploy-environment == 'prod' && 'production' || 'dev' }}
+    steps:
+      - name: Install ArgoCD CLI
+        run: |
+          curl -sSL -o argocd https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+          chmod +x argocd
+          sudo mv argocd /usr/local/bin/argocd
+
+      - name: Sync ArgoCD application
+        env:
+          ARGOCD_SERVER: ${{ vars.ARGOCD_SERVER }}
+          ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
+          PRIMARY: ${{ inputs.app-name }}
+          EXTRA: ${{ inputs.additional-apps }}
+        run: |
+          set -euo pipefail
+          argocd login "$ARGOCD_SERVER" \
+            --auth-token "$ARGOCD_AUTH_TOKEN" \
+            --grpc-web \
+            --insecure
+          APPS="$PRIMARY"
+          if [ -n "$EXTRA" ]; then
+            APPS="$APPS $(echo "$EXTRA" | tr ',' ' ')"
+          fi
+          for app in $APPS; do
+            echo "Syncing $app (${{ inputs.deploy-environment }}) ..."
+            argocd app sync "$app" --async || argocd app sync "$app"
+            argocd app wait "$app" --health --timeout 600 || true
+          done
+          echo "ArgoCD sync completed."

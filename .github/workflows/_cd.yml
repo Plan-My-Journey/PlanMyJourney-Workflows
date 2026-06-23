@@ -1,0 +1,116 @@
+name: Reusable - CD (GitOps deploy PR)
+
+on:
+  workflow_call:
+    inputs:
+      chart:
+        description: Helm chart directory name under helm-charts/
+        required: true
+        type: string
+      image-tag:
+        required: true
+        type: string
+      deploy-environment:
+        description: dev or prod (from branch)
+        required: true
+        type: string
+      gitops-repo:
+        required: false
+        default: Plan-My-Journey/PlanMyJourney-Gitops
+        type: string
+      values-file:
+        description: values-dev.yaml or values-prod.yaml
+        required: true
+        type: string
+      additional-charts:
+        description: Comma-separated extra charts to bump with the same tag
+        required: false
+        default: ""
+        type: string
+    secrets:
+      GITOPS_PAT:
+        required: true
+    outputs:
+      pull-request-number:
+        description: Deploy PR number in GitOps repo
+        value: ${{ jobs.cd.outputs.pull-request-number }}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  cd:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.deploy-environment == 'prod' && 'production' || 'dev' }}
+    outputs:
+      pull-request-number: ${{ steps.cpr.outputs.pull-request-number }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.gitops-repo }}
+          token: ${{ secrets.GITOPS_PAT }}
+          ref: main
+
+      - name: Bump image tags in Helm values
+        env:
+          TAG: ${{ inputs.image-tag }}
+          VALUES: ${{ inputs.values-file }}
+          CHART: ${{ inputs.chart }}
+          EXTRA: ${{ inputs.additional-charts }}
+        run: |
+          set -euo pipefail
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+          bump_chart() {
+            local chart="$1"
+            local file="helm-charts/${chart}/${VALUES}"
+            if [ ! -f "$file" ]; then
+              echo "Skip missing $file"
+              return 0
+            fi
+            if yq -e '.image' "$file" >/dev/null 2>&1; then
+              yq -i ".image.tag = \"${TAG}\"" "$file"
+            else
+              printf '\nimage:\n  tag: "%s"\n' "$TAG" >> "$file"
+            fi
+            echo "Updated $file → tag ${TAG}"
+            yq '.image' "$file"
+          }
+
+          bump_chart "$CHART"
+          if [ -n "$EXTRA" ]; then
+            IFS=',' read -ra charts <<< "$EXTRA"
+            for c in "${charts[@]}"; do
+              bump_chart "$(echo "$c" | xargs)"
+            done
+          fi
+
+      - name: Open deploy PR
+        id: cpr
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITOPS_PAT }}
+          base: main
+          branch: deploy/${{ inputs.chart }}-${{ inputs.deploy-environment }}-${{ inputs.image-tag }}
+          delete-branch: true
+          commit-message: "ci(${{ inputs.chart }}): deploy ${{ inputs.deploy-environment }} ${{ inputs.image-tag }}"
+          title: "Deploy ${{ inputs.chart }} (${{ inputs.deploy-environment }}) → ${{ inputs.image-tag }}"
+          labels: deploy,${{ inputs.deploy-environment }}
+          body: |
+            Automated GitOps deploy PR for **${{ inputs.deploy-environment }}**.
+
+            Chart: `helm-charts/${{ inputs.chart }}/${{ inputs.values-file }}`
+            Image tag: **`${{ inputs.image-tag }}`**
+
+            Merge this PR to let ArgoCD sync the new image.
+
+      - name: Auto-merge deploy PR (dev branch deployments)
+        if: inputs.deploy-environment == 'dev' && steps.cpr.outputs.pull-request-number != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITOPS_PAT }}
+          PR: ${{ steps.cpr.outputs.pull-request-number }}
+        run: |
+          gh pr merge "$PR" --merge --repo "${{ inputs.gitops-repo }}"
+          echo "Auto-merged DEV deploy PR #$PR"

@@ -1,0 +1,186 @@
+name: Reusable - Artifact Validation
+
+on:
+  workflow_call:
+    inputs:
+      service-name:
+        required: true
+        type: string
+      artifact-type:
+        description: container or static
+        required: false
+        default: container
+        type: string
+      chart:
+        description: Helm chart name (container only)
+        required: false
+        default: ""
+        type: string
+      image-name:
+        description: ECR repository path (container only)
+        required: false
+        default: ""
+        type: string
+      argocd-app-name:
+        description: ArgoCD application name in dev (container only)
+        required: false
+        default: ""
+        type: string
+      dev-bucket:
+        description: S3 bucket for static frontend artifacts
+        required: false
+        default: ""
+        type: string
+      dev-url:
+        description: Dev environment URL for health check
+        required: false
+        default: https://dev.invest-iq.online
+        type: string
+      gitops-repo:
+        required: false
+        default: Plan-My-Journey/PlanMyJourney-Gitops
+        type: string
+    secrets:
+      AWS_DEPLOY_ROLE_ARN_DEV:
+        required: true
+      ARGOCD_AUTH_TOKEN:
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  validate:
+    name: Artifact Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require PR from dev branch
+        if: github.event_name == 'pull_request'
+        run: |
+          if [ "${{ github.event.pull_request.head.ref }}" != "dev" ]; then
+            echo "::error::Production promotion requires a pull request from the dev branch."
+            exit 1
+          fi
+
+      - name: Resolve expected artifact tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            SHA="${{ github.event.pull_request.head.sha }}"
+          else
+            SHA="${{ github.sha }}"
+          fi
+          echo "expected-tag=sha-${SHA}" >> "$GITHUB_OUTPUT"
+          echo "commit-sha=${SHA}" >> "$GITHUB_OUTPUT"
+          echo "Expected artifact tag: sha-${SHA}"
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN_DEV }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: A — Verify container image exists in ECR
+        if: inputs.artifact-type == 'container'
+        env:
+          REPO: ${{ inputs.image-name }}
+          TAG: ${{ steps.tag.outputs.expected-tag }}
+        run: |
+          set -euo pipefail
+          aws ecr describe-images \
+            --repository-name "$REPO" \
+            --image-ids "imageTag=${TAG}" >/dev/null
+          echo "ECR image ${REPO}:${TAG} exists."
+
+      - name: A — Verify static artifact snapshot exists in S3
+        if: inputs.artifact-type == 'static'
+        env:
+          BUCKET: ${{ inputs.dev-bucket }}
+          TAG: ${{ steps.tag.outputs.expected-tag }}
+        run: |
+          set -euo pipefail
+          aws s3 ls "s3://${BUCKET}/artifacts/${TAG}/index.html" >/dev/null
+          aws s3 ls "s3://${BUCKET}/.deployments/${TAG}.json" >/dev/null
+          echo "Static artifact snapshot ${TAG} exists in ${BUCKET}."
+
+      - uses: actions/checkout@v4
+        if: inputs.artifact-type == 'container'
+        with:
+          repository: ${{ inputs.gitops-repo }}
+          ref: main
+
+      - name: B — Verify image tag in GitOps values-dev.yaml
+        if: inputs.artifact-type == 'container'
+        env:
+          CHART: ${{ inputs.chart }}
+          TAG: ${{ steps.tag.outputs.expected-tag }}
+        run: |
+          set -euo pipefail
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          FILE="helm-charts/${CHART}/values-dev.yaml"
+          GITOPS_TAG="$(yq -r '.image.tag // ""' "$FILE")"
+          if [ -z "$GITOPS_TAG" ] || [ "$GITOPS_TAG" = "null" ] || [ "$GITOPS_TAG" = "latest" ]; then
+            GITOPS_TAG="$(yq -r '.image.tag // ""' "helm-charts/${CHART}/values.yaml")"
+          fi
+          if [ "$GITOPS_TAG" != "$TAG" ]; then
+            echo "::error::GitOps dev tag '${GITOPS_TAG}' does not match expected '${TAG}'"
+            exit 1
+          fi
+          echo "GitOps values-dev.yaml tag matches ${TAG}."
+
+      - name: Install ArgoCD CLI
+        if: inputs.artifact-type == 'container'
+        run: |
+          curl -sSL -o argocd https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+          chmod +x argocd
+          sudo mv argocd /usr/local/bin/argocd
+
+      - name: C/D — Verify dev ArgoCD application is Synced and Healthy
+        if: inputs.artifact-type == 'container'
+        env:
+          ARGOCD_SERVER: ${{ vars.ARGOCD_SERVER }}
+          ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
+          APP: ${{ inputs.argocd-app-name }}
+        run: |
+          set -euo pipefail
+          argocd login "$ARGOCD_SERVER" \
+            --auth-token "$ARGOCD_AUTH_TOKEN" \
+            --grpc-web \
+            --insecure
+          STATUS="$(argocd app get "$APP" -o json | jq -r '.status.health.status')"
+          SYNC="$(argocd app get "$APP" -o json | jq -r '.status.sync.status')"
+          if [ "$STATUS" != "Healthy" ]; then
+            echo "::error::ArgoCD app ${APP} health is ${STATUS}, expected Healthy"
+            exit 1
+          fi
+          if [ "$SYNC" != "Synced" ]; then
+            echo "::error::ArgoCD app ${APP} sync is ${SYNC}, expected Synced"
+            exit 1
+          fi
+          echo "ArgoCD app ${APP} is Synced and Healthy."
+
+      - name: C/D — Verify dev frontend URL is reachable
+        if: inputs.artifact-type == 'static'
+        env:
+          URL: ${{ inputs.dev-url }}
+        run: |
+          set -euo pipefail
+          curl -fsS --retry 5 --retry-delay 5 "$URL" | head -c 200 >/dev/null
+          echo "Dev frontend ${URL} is reachable."
+
+      - name: E — Verify dev deployment validation commit status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ steps.tag.outputs.commit-sha }}
+          SERVICE: ${{ inputs.service-name }}
+        run: |
+          set -euo pipefail
+          CONTEXT="ci/artifact-validated-${SERVICE}"
+          STATE="$(gh api "repos/${{ github.repository }}/commits/${COMMIT}/statuses" \
+            --jq ".[] | select(.context==\"${CONTEXT}\") | .state" | head -n1)"
+          if [ "$STATE" != "success" ]; then
+            echo "::error::Commit status ${CONTEXT} on ${COMMIT} is '${STATE:-missing}', expected success."
+            exit 1
+          fi
+          echo "Commit status ${CONTEXT} is success."

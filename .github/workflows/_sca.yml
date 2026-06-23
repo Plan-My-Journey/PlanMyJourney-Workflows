@@ -1,0 +1,64 @@
+name: Reusable - SCA (Snyk)
+
+on:
+  workflow_call:
+    inputs:
+      service-name:
+        required: true
+        type: string
+      service-path:
+        required: true
+        type: string
+      runtime:
+        required: false
+        default: python
+        type: string
+    secrets:
+      SNYK_TOKEN:
+        required: true
+    outputs:
+      critical-found:
+        description: true if critical vulnerabilities were found
+        value: ${{ jobs.sca.outputs.critical-found }}
+
+jobs:
+  sca:
+    runs-on: ubuntu-latest
+    outputs:
+      critical-found: ${{ steps.scan.outputs.critical-found }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        if: inputs.runtime == 'python'
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        if: inputs.runtime == 'node'
+        with:
+          node-version: "20"
+
+      - name: Install Snyk CLI
+        run: npm install -g snyk
+
+      - name: Snyk security gate (CRITICAL)
+        id: scan
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+          cd "${{ inputs.service-path }}"
+          if [ "${{ inputs.runtime }}" = "node" ]; then
+            FILE="package.json"
+            PM="npm"
+          else
+            FILE="requirements.txt"
+            PM="pip"
+          fi
+          if snyk test --severity-threshold=critical --file="$FILE" --package-manager="$PM"; then
+            echo "critical-found=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "critical-found=true" >> "$GITHUB_OUTPUT"
+            echo "::error::Snyk found CRITICAL dependency vulnerabilities in ${{ inputs.service-name }}"
+            exit 1
+          fi

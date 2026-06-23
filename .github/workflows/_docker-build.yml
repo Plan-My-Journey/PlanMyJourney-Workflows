@@ -1,0 +1,39 @@
+name: Reusable - Docker Build + Trivy
+
+on:
+  workflow_call:
+    inputs:
+      service-name:
+        required: true
+        type: string
+      dockerfile:
+        required: true
+        type: string
+      context:
+        required: false
+        default: "."
+        type: string
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image (no push)
+        run: |
+          docker build -f "${{ inputs.dockerfile }}" -t "${{ inputs.service-name }}:ci" "${{ inputs.context }}"
+
+      - name: Install Trivy
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: Trivy security gate (fixable CRITICAL)
+        run: |
+          trivy image \
+            --ignore-unfixed \
+            --severity CRITICAL \
+            --exit-code 1 \
+            --no-progress \
+            --scanners vuln \
+            "${{ inputs.service-name }}:ci"

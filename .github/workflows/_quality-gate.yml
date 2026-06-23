@@ -1,0 +1,60 @@
+name: Reusable - Quality Gate
+
+on:
+  workflow_call:
+    inputs:
+      lint-result:
+        required: true
+        type: string
+      sast-result:
+        required: true
+        type: string
+      sca-result:
+        required: false
+        default: skipped
+        type: string
+      trivy-result:
+        required: false
+        default: skipped
+        type: string
+    outputs:
+      passed:
+        description: true when all required checks passed
+        value: ${{ jobs.gate.outputs.passed }}
+
+jobs:
+  gate:
+    name: Quality Gate
+    runs-on: ubuntu-latest
+    outputs:
+      passed: ${{ steps.check.outputs.passed }}
+    steps:
+      - name: Evaluate CI results
+        id: check
+        env:
+          LINT: ${{ inputs.lint-result }}
+          SAST: ${{ inputs.sast-result }}
+          SCA: ${{ inputs.sca-result }}
+          TRIVY: ${{ inputs.trivy-result }}
+        run: |
+          set -euo pipefail
+          fail=0
+          for name in LINT SAST SCA TRIVY; do
+            val="${!name}"
+            if [ "$val" = "skipped" ]; then
+              echo "$name: skipped"
+              continue
+            fi
+            if [ "$val" != "success" ]; then
+              echo "::error::Quality gate failed on $name ($val)"
+              fail=1
+            else
+              echo "$name: passed"
+            fi
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo "passed=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "passed=true" >> "$GITHUB_OUTPUT"
+          echo "Quality gate passed — ECR publish is allowed."

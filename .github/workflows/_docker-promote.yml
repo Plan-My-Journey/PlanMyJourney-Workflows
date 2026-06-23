@@ -1,0 +1,64 @@
+name: Reusable - Docker Promote (ECR)
+
+on:
+  workflow_call:
+    inputs:
+      image-name:
+        description: ECR repository path (e.g. ai-travel/ai-service)
+        required: true
+        type: string
+      source-tag:
+        description: Existing validated tag from dev deployment
+        required: true
+        type: string
+    secrets:
+      AWS_DEPLOY_ROLE_ARN_PROD:
+        required: true
+    outputs:
+      image-tag:
+        description: Tag to use in prod GitOps values (same as source)
+        value: ${{ jobs.promote.outputs.image-tag }}
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    environment: production
+    outputs:
+      image-tag: ${{ steps.promote.outputs.image-tag }}
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN_PROD }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Verify validated image exists (no rebuild)
+        id: promote
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          REPO: ${{ inputs.image-name }}
+          SOURCE: ${{ inputs.source-tag }}
+        run: |
+          set -euo pipefail
+          URI="${REGISTRY}/${REPO}:${SOURCE}"
+          echo "Verifying dev-validated image ${URI} ..."
+          DIGEST="$(aws ecr describe-images \
+            --repository-name "${REPO}" \
+            --image-ids "imageTag=${SOURCE}" \
+            --query 'imageDetails[0].imageDigest' \
+            --output text)"
+          if [ -z "$DIGEST" ] || [ "$DIGEST" = "None" ]; then
+            echo "::error::Source image ${URI} not found in ECR"
+            exit 1
+          fi
+          echo "Validated image digest: ${DIGEST}"
+          echo "Promoting same tag for production: ${SOURCE}"
+          echo "image-tag=${SOURCE}" >> "$GITHUB_OUTPUT"

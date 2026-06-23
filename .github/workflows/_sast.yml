@@ -1,0 +1,57 @@
+name: Reusable - SAST (SonarCloud)
+
+on:
+  workflow_call:
+    inputs:
+      service-path:
+        description: Service path for SonarCloud sources scope
+        required: true
+        type: string
+      sonar-project-key:
+        required: false
+        default: Plan-My-Journey_planmyjourney-app
+        type: string
+      sonar-organization:
+        required: false
+        default: plan-my-journey
+        type: string
+    secrets:
+      SONAR_TOKEN:
+        required: true
+    outputs:
+      quality-gate-failed:
+        description: true if SonarCloud quality gate failed
+        value: ${{ jobs.sonar.outputs.quality-gate-failed }}
+
+jobs:
+  sonar:
+    name: SonarCloud Scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      quality-gate-failed: ${{ steps.gate.outputs.quality-gate-failed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: SonarCloud Scan
+        id: scan
+        uses: SonarSource/sonarcloud-github-action@master
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.organization=${{ inputs.sonar-organization }}
+            -Dsonar.projectKey=${{ inputs.sonar-project-key }}
+            -Dsonar.sources=${{ inputs.service-path }}
+            -Dsonar.python.version=3.12
+            -Dsonar.qualitygate.wait=true
+            -Dsonar.exclusions=**/tests/**,**/__pycache__/**,**/.venv/**,**/node_modules/**
+
+      - name: Record quality gate result
+        id: gate
+        if: always()
+        run: echo "quality-gate-failed=${{ steps.scan.outcome == 'failure' }}" >> "$GITHUB_OUTPUT"

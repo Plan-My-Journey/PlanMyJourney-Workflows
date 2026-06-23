@@ -1,0 +1,42 @@
+name: Reusable - Notify (Brevo Email)
+
+on:
+  workflow_call:
+    inputs:
+      subject:
+        required: true
+        type: string
+      body:
+        required: true
+        type: string
+      service-name:
+        required: false
+        default: ""
+        type: string
+    secrets:
+      BREVO_API_KEY:
+        required: true
+      NOTIFY_EMAIL:
+        required: true
+
+jobs:
+  send-email:
+    name: Send email alert
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send email
+        env:
+          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
+          NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
+        run: |
+          curl --request POST \
+            --url https://api.brevo.com/v3/smtp/email \
+            --header "accept: application/json" \
+            --header "api-key: $BREVO_API_KEY" \
+            --header "content-type: application/json" \
+            --data "{
+              \"sender\": {\"name\": \"PlanMyJourney CI/CD\", \"email\": \"$NOTIFY_EMAIL\"},
+              \"to\": [{\"email\": \"$NOTIFY_EMAIL\"}],
+              \"subject\": \"${{ inputs.subject }}\",
+              \"textContent\": \"${{ inputs.body }}\n\nService: ${{ inputs.service-name }}\nRepo: ${{ github.repository }}\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"
+            }"

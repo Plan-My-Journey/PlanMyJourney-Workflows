@@ -1,0 +1,62 @@
+name: Reusable - Read GitOps Image Tag
+
+on:
+  workflow_call:
+    inputs:
+      chart:
+        description: Helm chart directory name under helm-charts/
+        required: true
+        type: string
+      values-file:
+        description: Environment values file (e.g. values-dev.yaml)
+        required: true
+        type: string
+      gitops-repo:
+        required: false
+        default: Plan-My-Journey/PlanMyJourney-Gitops
+        type: string
+    outputs:
+      image-tag:
+        description: Image tag from GitOps values
+        value: ${{ jobs.read.outputs.image-tag }}
+
+permissions:
+  contents: read
+
+jobs:
+  read:
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ steps.parse.outputs.image-tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.gitops-repo }}
+          ref: main
+
+      - name: Parse image tag from GitOps values
+        id: parse
+        env:
+          CHART: ${{ inputs.chart }}
+          VALUES: ${{ inputs.values-file }}
+        run: |
+          set -euo pipefail
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+          ENV_FILE="helm-charts/${CHART}/${VALUES}"
+          BASE_FILE="helm-charts/${CHART}/values.yaml"
+
+          TAG=""
+          if [ -f "$ENV_FILE" ]; then
+            TAG="$(yq -r '.image.tag // ""' "$ENV_FILE")"
+          fi
+          if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
+            TAG="$(yq -r '.image.tag // ""' "$BASE_FILE")"
+          fi
+          if [ -z "$TAG" ] || [ "$TAG" = "null" ] || [ "$TAG" = "latest" ]; then
+            echo "::error::No promoted image tag found in ${ENV_FILE} or ${BASE_FILE}"
+            exit 1
+          fi
+          echo "image-tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Resolved image tag: ${TAG}"

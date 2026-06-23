@@ -1,0 +1,39 @@
+name: Reusable - Smoke Test
+
+on:
+  workflow_call:
+    inputs:
+      target-environment:
+        required: true
+        type: string
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run smoke tests
+        env:
+          ENV: ${{ inputs.target-environment }}
+        run: |
+          set -euo pipefail
+          if [ "$ENV" = "dev" ]; then
+            API="https://dev-api.invest-iq.online"
+            WEB="https://dev.invest-iq.online"
+          else
+            API="https://api.invest-iq.online"
+            WEB="https://invest-iq.online"
+          fi
+          echo "Smoke testing API at $API"
+          if curl -fsS --retry 8 --retry-delay 15 --retry-all-errors "$API/api/users/health"; then
+            echo "API health endpoint OK"
+          elif curl -fsS --retry 8 --retry-delay 15 "$API/health"; then
+            echo "API /health OK"
+          elif curl -fsS --retry 8 --retry-delay 15 "$API/api/ai/health"; then
+            echo "API ai health OK"
+          else
+            echo "::error::All API smoke checks failed for ${API}"
+            exit 1
+          fi
+          echo "Smoke testing frontend at $WEB"
+          curl -fsS --retry 8 --retry-delay 15 --retry-all-errors "$WEB" | head -c 200 >/dev/null
+          echo "Smoke tests completed for $ENV"

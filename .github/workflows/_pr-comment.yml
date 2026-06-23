@@ -1,0 +1,74 @@
+name: Reusable - PR Validation Comment
+
+on:
+  workflow_call:
+    inputs:
+      service-name:
+        required: true
+        type: string
+      lint:
+        required: true
+        type: string
+      sast:
+        required: true
+        type: string
+      sca:
+        required: false
+        default: skipped
+        type: string
+      trivy:
+        required: false
+        default: skipped
+        type: string
+
+jobs:
+  comment:
+    name: Post validation summary
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - uses: actions/github-script@v7
+        env:
+          SVC: ${{ inputs.service-name }}
+          LINT: ${{ inputs.lint }}
+          SAST: ${{ inputs.sast }}
+          SCA: ${{ inputs.sca }}
+          TRIVY: ${{ inputs.trivy }}
+        with:
+          script: |
+            const icon = (r) =>
+              r === 'success' ? '✅'
+              : r === 'skipped' ? '⏭️'
+              : r === 'cancelled' ? '🚫'
+              : '❌';
+            const svc = process.env.SVC;
+            const rows = [
+              ['Lint + Gitleaks', process.env.LINT],
+              ['SAST (SonarCloud QG)', process.env.SAST],
+              ['SCA (Snyk CRITICAL)', process.env.SCA],
+              ['Docker build + Trivy CRITICAL', process.env.TRIVY],
+            ];
+            const allOk = rows.every(([, r]) => r === 'success' || r === 'skipped');
+            const marker = `<!-- ci-validation:${svc} -->`;
+            const body = [
+              marker,
+              `### CI validation — \`${svc}\``,
+              '',
+              `**Overall:** ${allOk ? '✅ passed' : '❌ failed'}`,
+              '',
+              '| Check | Result |',
+              '| --- | --- |',
+              ...rows.map(([n, r]) => `| ${n} | ${icon(r)} ${r} |`),
+              '',
+              '_Images are published only via `workflow_dispatch` after the Quality Gate passes._',
+            ].join('\n');
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number });
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }

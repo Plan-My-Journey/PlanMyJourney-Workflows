@@ -1,0 +1,43 @@
+name: Reusable - Record Artifact Validation
+
+on:
+  workflow_call:
+    inputs:
+      service-name:
+        required: true
+        type: string
+      artifact-tag:
+        required: true
+        type: string
+      artifact-type:
+        required: false
+        default: container
+        type: string
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  record:
+    name: Record validated artifact
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish artifact validation commit status
+        uses: actions/github-script@v7
+        env:
+          SERVICE_NAME: ${{ inputs.service-name }}
+          ARTIFACT_TAG: ${{ inputs.artifact-tag }}
+          ARTIFACT_TYPE: ${{ inputs.artifact-type }}
+        with:
+          script: |
+            const statusContext = `ci/artifact-validated-${process.env.SERVICE_NAME}`;
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: 'success',
+              context: statusContext,
+              description: `${process.env.ARTIFACT_TYPE} artifact ${process.env.ARTIFACT_TAG} validated in dev`,
+              target_url: `${process.env.GITHUB_SERVER_URL}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+            });

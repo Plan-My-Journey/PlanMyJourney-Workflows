@@ -1,0 +1,20 @@
+name: Reusable - Production Deployment Gate
+
+on:
+  workflow_call:
+    inputs:
+      service-name:
+        required: true
+        type: string
+
+jobs:
+  approve:
+    name: Production approval
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Record production deployment approval
+        run: |
+          echo "Production deployment approved for ${{ inputs.service-name }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "Branch: ${{ github.ref_name }}"
