@@ -1,0 +1,126 @@
+name: Reusable - Detect Changed Services
+
+on:
+  workflow_call:
+    inputs:
+      base-ref:
+        description: Git ref to compare against (e.g. PR base SHA or previous commit)
+        required: true
+        type: string
+      head-ref:
+        description: Git ref for the current revision
+        required: false
+        default: HEAD
+        type: string
+    outputs:
+      matrix:
+        description: JSON array of changed service descriptors for matrix jobs
+        value: ${{ jobs.detect.outputs.matrix }}
+      count:
+        description: Number of changed services
+        value: ${{ jobs.detect.outputs.count }}
+      services:
+        description: Comma-separated service names
+        value: ${{ jobs.detect.outputs.services }}
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.filter.outputs.matrix }}
+      count: ${{ steps.filter.outputs.count }}
+      services: ${{ steps.filter.outputs.services }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed monorepo services
+        id: filter
+        env:
+          BASE: ${{ inputs.base-ref }}
+          HEAD: ${{ inputs.head-ref }}
+        run: |
+          set -euo pipefail
+          BASE="${BASE}"
+          HEAD="${HEAD}"
+          if [ "$BASE" = "0000000000000000000000000000000000000000" ] || [ "$BASE" = "$HEAD" ]; then
+            BASE="$(git rev-parse HEAD~1)"
+          fi
+          git diff --name-only "${BASE}" "${HEAD}" > /tmp/changed.txt || true
+          if [ ! -s /tmp/changed.txt ]; then
+            git diff --name-only HEAD~1 HEAD > /tmp/changed.txt || true
+          fi
+          echo "Changed files (base=${BASE}, head=${HEAD}):"
+          cat /tmp/changed.txt || true
+
+          add_service() {
+            local name="$1"
+            local chart="$2"
+            local image="$3"
+            local runtime="$4"
+            local service_path="$5"
+            local dockerfile="$6"
+            local context="$7"
+            local deploy_type="$8"
+            local argocd_app="$9"
+            local extra_charts="${10:-}"
+            local sast_path="${11:-$service_path}"
+            for existing in "${CHANGED[@]:-}"; do
+              if [ "$existing" = "$name" ]; then
+                return 0
+              fi
+            done
+            CHANGED+=("$name")
+            JSON+=("{\"service\":\"${name}\",\"chart\":\"${chart}\",\"image\":\"${image}\",\"runtime\":\"${runtime}\",\"service-path\":\"${service_path}\",\"sast-path\":\"${sast_path}\",\"dockerfile\":\"${dockerfile}\",\"context\":\"${context}\",\"deploy-type\":\"${deploy_type}\",\"argocd-app\":\"${argocd_app}\",\"additional-charts\":\"${extra_charts}\"}")
+          }
+
+          add_all_services() {
+            add_service "frontend" "frontend" "ai-travel/frontend" "node" "frontend" "docker/frontend/Dockerfile" "frontend" "static" "dev-frontend" ""
+            add_service "user-service" "user-service" "ai-travel/user-service" "python" "services/user-service" "docker/user-service/Dockerfile" "services/user-service" "container" "dev-user-service" ""
+            add_service "travel-service" "travel-service" "ai-travel/travel-service" "python" "services/travel-service" "docker/travel-service/Dockerfile" "services/travel-service" "container" "dev-travel-service" ""
+            add_service "utility-service" "utility-service" "ai-travel/utility-service" "python" "services/utility-service" "docker/utility-service/Dockerfile" "services/utility-service" "container" "dev-utility-service" ""
+            add_service "ai-service" "ai-service" "ai-travel/ai-service" "python" "services/ai-service" "docker/ai-service/Dockerfile" "services/ai-service" "container" "dev-ai-service" "ai-worker" "services/ai-service"
+          }
+
+          matches() {
+            local pattern="$1"
+            grep -Eq "$pattern" /tmp/changed.txt
+          }
+
+          CHANGED=()
+          JSON=()
+
+          if matches '^\.github/workflows/'; then
+            add_all_services
+          fi
+          if matches '^frontend/' || matches '^docker/frontend/'; then
+            add_service "frontend" "frontend" "ai-travel/frontend" "node" "frontend" "docker/frontend/Dockerfile" "frontend" "static" "dev-frontend" ""
+          fi
+          if matches '^services/user-service/' || matches '^docker/user-service/'; then
+            add_service "user-service" "user-service" "ai-travel/user-service" "python" "services/user-service" "docker/user-service/Dockerfile" "services/user-service" "container" "dev-user-service" ""
+          fi
+          if matches '^services/travel-service/' || matches '^docker/travel-service/'; then
+            add_service "travel-service" "travel-service" "ai-travel/travel-service" "python" "services/travel-service" "docker/travel-service/Dockerfile" "services/travel-service" "container" "dev-travel-service" ""
+          fi
+          if matches '^services/utility-service/' || matches '^docker/utility-service/'; then
+            add_service "utility-service" "utility-service" "ai-travel/utility-service" "python" "services/utility-service" "docker/utility-service/Dockerfile" "services/utility-service" "container" "dev-utility-service" ""
+          fi
+          if matches '^services/ai-service/' || matches '^docker/ai-service/'; then
+            add_service "ai-service" "ai-service" "ai-travel/ai-service" "python" "services/ai-service" "docker/ai-service/Dockerfile" "services/ai-service" "container" "dev-ai-service" "ai-worker" "services/ai-service"
+          fi
+
+          if [ "${#JSON[@]}" -eq 0 ]; then
+            MATRIX='[]'
+            COUNT=0
+            SERVICES=""
+          else
+            MATRIX="[$(IFS=,; echo "${JSON[*]}")]"
+            COUNT="${#JSON[@]}"
+            SERVICES="$(IFS=,; echo "${CHANGED[*]}")"
+          fi
+
+          echo "matrix=${MATRIX}" >> "$GITHUB_OUTPUT"
+          echo "count=${COUNT}" >> "$GITHUB_OUTPUT"
+          echo "services=${SERVICES}" >> "$GITHUB_OUTPUT"
+          echo "Detected ${COUNT} changed service(s): ${SERVICES:-none}"

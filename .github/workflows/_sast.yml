@@ -15,6 +15,11 @@ on:
         required: false
         default: plan-my-journey
         type: string
+      fail-on-quality-gate:
+        description: Fail the job when SonarCloud quality gate is not OK
+        required: false
+        default: false
+        type: boolean
     secrets:
       SONAR_TOKEN:
         required: true
@@ -106,4 +111,8 @@ jobs:
           else
             echo "::warning::Quality Gate is ${STATUS}. See https://sonarcloud.io/project/overview?id=${PROJECT}"
             echo "quality-gate-failed=true" >> "$GITHUB_OUTPUT"
+            if [ "${{ inputs.fail-on-quality-gate }}" = "true" ]; then
+              echo "::error::SonarCloud quality gate failed (${STATUS})"
+              exit 1
+            fi
           fi

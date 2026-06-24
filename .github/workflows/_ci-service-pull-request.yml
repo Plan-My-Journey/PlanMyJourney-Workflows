@@ -1,0 +1,69 @@
+name: Reusable - CI Service Pull Request Scan
+
+on:
+  workflow_call:
+    inputs:
+      service-name:
+        required: true
+        type: string
+      service-path:
+        required: true
+        type: string
+      sast-path:
+        required: false
+        default: ""
+        type: string
+      runtime:
+        required: false
+        default: python
+        type: string
+    secrets:
+      SONAR_TOKEN:
+        required: true
+      SNYK_TOKEN:
+        required: true
+
+jobs:
+  sast:
+    uses: ./.github/workflows/_sast.yml
+    with:
+      service-path: ${{ inputs.sast-path != '' && inputs.sast-path || inputs.service-path }}
+      fail-on-quality-gate: true
+    secrets:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  sca:
+    needs: [sast]
+    uses: ./.github/workflows/_sca.yml
+    with:
+      service-name: ${{ inputs.service-name }}
+      service-path: ${{ inputs.service-path }}
+      runtime: ${{ inputs.runtime }}
+      severity-threshold: high
+    secrets:
+      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
+  quality-gate:
+    needs: [sast, sca]
+    uses: ./.github/workflows/_quality-gate.yml
+    with:
+      lint-result: skipped
+      sast-result: ${{ needs.sast.result }}
+      sca-result: ${{ needs.sca.result }}
+      trivy-result: skipped
+      sonar-quality-gate-failed: ${{ needs.sast.outputs.quality-gate-failed }}
+      snyk-critical-found: ${{ needs.sca.outputs.critical-found }}
+      snyk-high-found: ${{ needs.sca.outputs.high-found }}
+
+  pr-comment:
+    needs: [sast, sca, quality-gate]
+    if: always()
+    uses: ./.github/workflows/_pr-comment.yml
+    with:
+      service-name: ${{ inputs.service-name }}
+      lint: skipped
+      sast: ${{ needs.sast.result }}
+      sca: ${{ needs.sca.result }}
+      trivy: skipped
+      quality-gate: ${{ needs.quality-gate.result }}
+      sonar-quality-gate: ${{ needs.sast.outputs.quality-gate-failed == 'true' && 'failed' || 'passed' }}

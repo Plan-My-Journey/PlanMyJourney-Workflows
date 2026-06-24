@@ -13,6 +13,11 @@ on:
         required: false
         default: python
         type: string
+      severity-threshold:
+        description: Snyk severity threshold (low, medium, high, critical)
+        required: false
+        default: critical
+        type: string
     secrets:
       SNYK_TOKEN:
         required: true
@@ -20,12 +25,16 @@ on:
       critical-found:
         description: true if critical vulnerabilities were found
         value: ${{ jobs.sca.outputs.critical-found }}
+      high-found:
+        description: true if high or critical vulnerabilities were found
+        value: ${{ jobs.sca.outputs.high-found }}
 
 jobs:
   sca:
     runs-on: ubuntu-latest
     outputs:
       critical-found: ${{ steps.scan.outputs.critical-found }}
+      high-found: ${{ steps.scan.outputs.high-found }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
@@ -55,10 +64,11 @@ jobs:
       - name: Install Snyk CLI
         run: npm install -g snyk
 
-      - name: Snyk security gate (CRITICAL)
+      - name: Snyk security gate (${{ inputs.severity-threshold }}+)
         id: scan
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+          THRESHOLD: ${{ inputs.severity-threshold }}
         run: |
           cd "${{ inputs.service-path }}"
           if [ "${{ inputs.runtime }}" = "node" ]; then
@@ -68,10 +78,12 @@ jobs:
             FILE="requirements.txt"
             PM="pip"
           fi
-          if snyk test --severity-threshold=critical --file="$FILE" --package-manager="$PM"; then
+          if snyk test --severity-threshold="${THRESHOLD}" --file="$FILE" --package-manager="$PM"; then
             echo "critical-found=false" >> "$GITHUB_OUTPUT"
+            echo "high-found=false" >> "$GITHUB_OUTPUT"
           else
             echo "critical-found=true" >> "$GITHUB_OUTPUT"
-            echo "::error::Snyk found CRITICAL dependency vulnerabilities in ${{ inputs.service-name }}"
+            echo "high-found=true" >> "$GITHUB_OUTPUT"
+            echo "::error::Snyk found ${THRESHOLD}+ dependency vulnerabilities in ${{ inputs.service-name }}"
             exit 1
           fi

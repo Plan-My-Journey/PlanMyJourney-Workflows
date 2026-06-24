@@ -1,0 +1,60 @@
+name: Reusable - Dev Deploy Frontend
+
+on:
+  workflow_call:
+    inputs:
+      artifact-tag:
+        required: true
+        type: string
+      frontend-bucket:
+        required: true
+        type: string
+      cloudfront-distribution-id:
+        required: true
+        type: string
+      api-url:
+        required: false
+        default: https://dev-api.invest-iq.online/api
+        type: string
+    secrets:
+      AWS_DEPLOY_ROLE_ARN_DEV:
+        required: true
+      AWS_DEPLOY_ROLE_ARN_PROD:
+        required: true
+
+jobs:
+  frontend-build:
+    uses: ./.github/workflows/_frontend-build.yml
+    with:
+      api-url: ${{ inputs.api-url }}
+
+  frontend-s3-deploy-dev:
+    needs: [frontend-build]
+    uses: ./.github/workflows/_frontend-s3-deploy.yml
+    with:
+      deploy-environment: dev
+      frontend-bucket: ${{ inputs.frontend-bucket }}
+      cloudfront-distribution-id: ${{ inputs.cloudfront-distribution-id }}
+      artifact-tag: ${{ inputs.artifact-tag }}
+    secrets:
+      AWS_DEPLOY_ROLE_ARN_DEV: ${{ secrets.AWS_DEPLOY_ROLE_ARN_DEV }}
+      AWS_DEPLOY_ROLE_ARN_PROD: ${{ secrets.AWS_DEPLOY_ROLE_ARN_PROD }}
+
+  smoke-test:
+    needs: [frontend-s3-deploy-dev]
+    uses: ./.github/workflows/_smoke-test.yml
+    with:
+      target-environment: dev
+      s3-bucket: ${{ inputs.frontend-bucket }}
+      skip-api-check: true
+    secrets:
+      AWS_DEPLOY_ROLE_ARN_DEV: ${{ secrets.AWS_DEPLOY_ROLE_ARN_DEV }}
+      AWS_DEPLOY_ROLE_ARN_PROD: ${{ secrets.AWS_DEPLOY_ROLE_ARN_PROD }}
+
+  record-artifact-validation:
+    needs: [smoke-test]
+    uses: ./.github/workflows/_record-artifact-validation.yml
+    with:
+      service-name: frontend
+      artifact-tag: ${{ inputs.artifact-tag }}
+      artifact-type: static

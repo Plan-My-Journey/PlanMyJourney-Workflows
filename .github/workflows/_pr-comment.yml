@@ -20,6 +20,14 @@ on:
         required: false
         default: skipped
         type: string
+      quality-gate:
+        required: false
+        default: skipped
+        type: string
+      sonar-quality-gate:
+        required: false
+        default: unknown
+        type: string
 
 jobs:
   comment:
@@ -35,21 +43,29 @@ jobs:
           SAST: ${{ inputs.sast }}
           SCA: ${{ inputs.sca }}
           TRIVY: ${{ inputs.trivy }}
+          QG: ${{ inputs.quality-gate }}
+          SONAR_QG: ${{ inputs.sonar-quality-gate }}
         with:
           script: |
             const icon = (r) =>
-              r === 'success' ? '✅'
+              r === 'success' || r === 'passed' ? '✅'
               : r === 'skipped' ? '⏭️'
               : r === 'cancelled' ? '🚫'
               : '❌';
             const svc = process.env.SVC;
             const rows = [
-              ['Lint + Gitleaks', process.env.LINT],
-              ['SAST (SonarCloud QG)', process.env.SAST],
-              ['SCA (Snyk CRITICAL)', process.env.SCA],
-              ['Docker build + Trivy CRITICAL', process.env.TRIVY],
+              ['SAST (SonarCloud)', process.env.SAST],
+              ['SonarCloud Quality Gate', process.env.SONAR_QG],
+              ['SCA (Snyk High/Critical)', process.env.SCA],
+              ['Quality Gate', process.env.QG],
             ];
-            const allOk = rows.every(([, r]) => r === 'success' || r === 'skipped');
+            if (process.env.LINT !== 'skipped') {
+              rows.unshift(['Lint + Gitleaks', process.env.LINT]);
+            }
+            if (process.env.TRIVY !== 'skipped') {
+              rows.push(['Docker build + Trivy', process.env.TRIVY]);
+            }
+            const allOk = rows.every(([, r]) => r === 'success' || r === 'passed' || r === 'skipped');
             const marker = `<!-- ci-validation:${svc} -->`;
             const body = [
               marker,
@@ -61,7 +77,7 @@ jobs:
               '| --- | --- |',
               ...rows.map(([n, r]) => `| ${n} | ${icon(r)} ${r} |`),
               '',
-              '_Images are published only via `workflow_dispatch` after the Quality Gate passes._',
+              '_Dev deployment runs only after merge to `dev`. Production releases are manual via `release.yml`._',
             ].join('\n');
             const { owner, repo } = context.repo;
             const issue_number = context.issue.number;
