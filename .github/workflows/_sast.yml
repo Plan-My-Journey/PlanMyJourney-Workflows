@@ -29,6 +29,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      pull-requests: read
     outputs:
       quality-gate-failed: ${{ steps.gate.outputs.quality-gate-failed }}
     steps:
@@ -48,6 +49,8 @@ jobs:
             -Dsonar.projectKey=${{ inputs.sonar-project-key }}
             -Dsonar.sources=${{ inputs.service-path }}
             -Dsonar.python.version=3.12
+            -Dsonar.branch.name=${{ github.ref_name }}
+            -Dsonar.newCode.referenceBranch=main
             -Dsonar.qualitygate.wait=true
             -Dsonar.exclusions=**/tests/**,**/__pycache__/**,**/.venv/**,**/node_modules/**
 
