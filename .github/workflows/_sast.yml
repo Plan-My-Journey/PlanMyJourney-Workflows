@@ -37,6 +37,30 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Ensure SonarCloud project is configured
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          PROJECT: ${{ inputs.sonar-project-key }}
+          ORG: ${{ inputs.sonar-organization }}
+        run: |
+          set -euo pipefail
+          curl -sf -u "${SONAR_TOKEN}:" \
+            "https://sonarcloud.io/api/authentication/validate" >/dev/null
+          curl -sf -X POST -u "${SONAR_TOKEN}:" \
+            "https://sonarcloud.io/api/projects/update_visibility?project=${PROJECT}&visibility=public" \
+            || true
+          if curl -sf -u "${SONAR_TOKEN}:" \
+            "https://sonarcloud.io/api/project_branches/list?project=${PROJECT}" \
+            | grep -q '"name":"master"'; then
+            curl -sf -X POST -u "${SONAR_TOKEN}:" \
+              "https://sonarcloud.io/api/project_branches/rename?project=${PROJECT}&name=master&newName=main" \
+              || true
+          fi
+          curl -sf -X POST -u "${SONAR_TOKEN}:" \
+            "https://sonarcloud.io/api/project_branches/set_main_branch?project=${PROJECT}&branch=main" \
+            || true
+          echo "SonarCloud project ready (public, main branch)."
+
       - name: SonarCloud Scan
         id: scan
         uses: SonarSource/sonarcloud-github-action@ffc3010689be73b8e5ae0c57ce35968afd7909e8 # v5.0.0
