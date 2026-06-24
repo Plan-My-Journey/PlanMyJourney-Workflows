@@ -16,6 +16,9 @@ on:
       matrix:
         description: JSON array of changed service descriptors for matrix jobs
         value: ${{ jobs.detect.outputs.matrix }}
+      container-matrix:
+        description: JSON array of changed container services only (for backend deploy/release)
+        value: ${{ jobs.detect.outputs.container-matrix }}
       count:
         description: Number of changed services
         value: ${{ jobs.detect.outputs.count }}
@@ -28,6 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.filter.outputs.matrix }}
+      container-matrix: ${{ steps.filter.outputs.container-matrix }}
       count: ${{ steps.filter.outputs.count }}
       services: ${{ steps.filter.outputs.services }}
     steps:
@@ -72,7 +76,11 @@ jobs:
               fi
             done
             CHANGED+=("$name")
-            JSON+=("{\"service\":\"${name}\",\"chart\":\"${chart}\",\"image\":\"${image}\",\"runtime\":\"${runtime}\",\"service-path\":\"${service_path}\",\"sast-path\":\"${sast_path}\",\"dockerfile\":\"${dockerfile}\",\"context\":\"${context}\",\"deploy-type\":\"${deploy_type}\",\"argocd-app\":\"${argocd_app}\",\"additional-charts\":\"${extra_charts}\"}")
+            local entry="{\"service\":\"${name}\",\"chart\":\"${chart}\",\"image\":\"${image}\",\"runtime\":\"${runtime}\",\"service-path\":\"${service_path}\",\"sast-path\":\"${sast_path}\",\"dockerfile\":\"${dockerfile}\",\"context\":\"${context}\",\"deploy-type\":\"${deploy_type}\",\"argocd-app\":\"${argocd_app}\",\"additional-charts\":\"${extra_charts}\"}"
+            JSON+=("$entry")
+            if [ "$deploy_type" = "container" ]; then
+              CONTAINER_JSON+=("$entry")
+            fi
           }
 
           add_all_services() {
@@ -90,6 +98,7 @@ jobs:
 
           CHANGED=()
           JSON=()
+          CONTAINER_JSON=()
 
           if matches '^\.github/workflows/'; then
             add_all_services
@@ -112,15 +121,22 @@ jobs:
 
           if [ "${#JSON[@]}" -eq 0 ]; then
             MATRIX='[]'
+            CONTAINER_MATRIX='[]'
             COUNT=0
             SERVICES=""
           else
             MATRIX="[$(IFS=,; echo "${JSON[*]}")]"
+            if [ "${#CONTAINER_JSON[@]}" -eq 0 ]; then
+              CONTAINER_MATRIX='[]'
+            else
+              CONTAINER_MATRIX="[$(IFS=,; echo "${CONTAINER_JSON[*]}")]"
+            fi
             COUNT="${#JSON[@]}"
             SERVICES="$(IFS=,; echo "${CHANGED[*]}")"
           fi
 
           echo "matrix=${MATRIX}" >> "$GITHUB_OUTPUT"
+          echo "container-matrix=${CONTAINER_MATRIX}" >> "$GITHUB_OUTPUT"
           echo "count=${COUNT}" >> "$GITHUB_OUTPUT"
           echo "services=${SERVICES}" >> "$GITHUB_OUTPUT"
           echo "Detected ${COUNT} changed service(s): ${SERVICES:-none}"
