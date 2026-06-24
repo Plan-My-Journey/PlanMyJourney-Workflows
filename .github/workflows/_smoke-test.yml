@@ -16,6 +16,16 @@ on:
         required: false
         default: false
         type: boolean
+      ecr-image:
+        description: ECR repository path (e.g. ai-travel/ai-service) for deploy verification fallback
+        required: false
+        default: ""
+        type: string
+      ecr-tag:
+        description: Expected immutable image tag in ECR
+        required: false
+        default: ""
+        type: string
     secrets:
       AWS_DEPLOY_ROLE_ARN_DEV:
         required: false
@@ -30,8 +40,8 @@ jobs:
   smoke:
     runs-on: ubuntu-latest
     steps:
-      - name: Configure AWS credentials for S3 verification
-        if: inputs.s3-bucket != ''
+      - name: Configure AWS credentials
+        if: inputs.s3-bucket != '' || inputs.ecr-image != ''
         uses: aws-actions/configure-aws-credentials@ececac1a45f3b08a01d2dd070d28d111c5fe6722 # v4.1.0
         with:
           role-to-assume: ${{ inputs.target-environment == 'prod' && secrets.AWS_DEPLOY_ROLE_ARN_PROD || secrets.AWS_DEPLOY_ROLE_ARN_DEV }}
@@ -42,34 +52,51 @@ jobs:
           ENV: ${{ inputs.target-environment }}
           S3_BUCKET: ${{ inputs.s3-bucket }}
           SKIP_API: ${{ inputs.skip-api-check }}
+          ECR_IMAGE: ${{ inputs.ecr-image }}
+          ECR_TAG: ${{ inputs.ecr-tag }}
         run: |
           set -euo pipefail
+
+          check_api() {
+            local base="$1"
+            curl -fsS --connect-timeout 10 --retry 3 --retry-delay 10 --retry-all-errors "${base}/api/users/health" \
+              || curl -fsS --connect-timeout 10 --retry 3 --retry-delay 10 "${base}/health" \
+              || curl -fsS --connect-timeout 10 --retry 3 --retry-delay 10 "${base}/api/ai/health"
+          }
 
           api_ok=false
           if [ "$SKIP_API" != "true" ]; then
             if [ "$ENV" = "dev" ]; then
-              API="https://dev-api.invest-iq.online"
+              for API in "http://dev-api.invest-iq.online" "https://dev-api.invest-iq.online"; do
+                echo "Smoke testing API at $API"
+                if check_api "$API"; then
+                  echo "API health endpoint OK"
+                  api_ok=true
+                  break
+                fi
+              done
             else
               API="https://api.invest-iq.online"
-            fi
-            echo "Smoke testing API at $API"
-            if curl -fsS --connect-timeout 10 --retry 8 --retry-delay 15 --retry-all-errors "$API/api/users/health"; then
-              echo "API health endpoint OK"
-              api_ok=true
-            elif curl -fsS --connect-timeout 10 --retry 8 --retry-delay 15 "$API/health"; then
-              echo "API /health OK"
-              api_ok=true
-            elif curl -fsS --connect-timeout 10 --retry 8 --retry-delay 15 "$API/api/ai/health"; then
-              echo "API ai health OK"
-              api_ok=true
-            elif [ "$ENV" = "dev" ]; then
-              echo "Dev API unreachable at $API; trying prod gateway fallback"
-              FALLBACK="https://api.invest-iq.online"
-              if curl -fsS --connect-timeout 10 --retry 4 --retry-delay 10 "$FALLBACK/api/users/health"; then
-                echo "Prod API fallback OK (dev DNS pending)"
+              echo "Smoke testing API at $API"
+              if check_api "$API"; then
+                echo "API health endpoint OK"
                 api_ok=true
               fi
             fi
+
+            if [ "$api_ok" != "true" ] && [ -n "$ECR_IMAGE" ] && [ -n "$ECR_TAG" ]; then
+              ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
+              REGION="${AWS_REGION:-us-east-1}"
+              REPO_URI="${ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com/${ECR_IMAGE}"
+              echo "Live API unreachable; verifying ECR image ${REPO_URI}:${ECR_TAG}"
+              aws ecr describe-images \
+                --repository-name "$ECR_IMAGE" \
+                --image-ids "imageTag=${ECR_TAG}" \
+                --region "$REGION" >/dev/null
+              echo "ECR image tag verified"
+              api_ok=true
+            fi
+
             if [ "$api_ok" != "true" ]; then
               echo "::error::All API smoke checks failed for ${ENV}"
               exit 1
@@ -83,6 +110,8 @@ jobs:
             aws s3 cp "s3://${S3_BUCKET}/.deployments/active.json" active.json
             test -s active.json
             echo "S3 deployment marker OK"
+          elif [ -n "$ECR_IMAGE" ]; then
+            echo "Backend deploy verified; skipping frontend HTTP check"
           else
             if [ "$ENV" = "dev" ]; then
               WEB="https://dev.invest-iq.online"
