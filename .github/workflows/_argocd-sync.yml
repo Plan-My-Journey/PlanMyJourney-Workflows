@@ -40,8 +40,18 @@ jobs:
           ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
           PRIMARY: ${{ inputs.app-name }}
           EXTRA: ${{ inputs.additional-apps }}
+          DEPLOY_ENV: ${{ inputs.deploy-environment }}
         run: |
           set -euo pipefail
+          if [ -z "$ARGOCD_AUTH_TOKEN" ]; then
+            if [ "$DEPLOY_ENV" = "dev" ]; then
+              echo "::warning::ARGOCD_AUTH_TOKEN is not set — skipping explicit ArgoCD sync."
+              echo "GitOps auto-merge will reconcile dev; add ARGOCD_AUTH_TOKEN to enable forced sync."
+              exit 0
+            fi
+            echo "::error::ARGOCD_AUTH_TOKEN is required for prod ArgoCD sync"
+            exit 1
+          fi
           argocd login "$ARGOCD_SERVER" \
             --auth-token "$ARGOCD_AUTH_TOKEN" \
             --grpc-web \
