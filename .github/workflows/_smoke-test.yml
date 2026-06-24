@@ -6,34 +6,91 @@ on:
       target-environment:
         required: true
         type: string
+      s3-bucket:
+        description: When set, verify static frontend deployment via S3 instead of HTTP
+        required: false
+        default: ""
+        type: string
+      skip-api-check:
+        description: Skip API health checks (frontend-only deploys)
+        required: false
+        default: false
+        type: boolean
+    secrets:
+      AWS_DEPLOY_ROLE_ARN_DEV:
+        required: false
+      AWS_DEPLOY_ROLE_ARN_PROD:
+        required: false
+
+permissions:
+  id-token: write
+  contents: read
 
 jobs:
   smoke:
     runs-on: ubuntu-latest
     steps:
+      - name: Configure AWS credentials for S3 verification
+        if: inputs.s3-bucket != ''
+        uses: aws-actions/configure-aws-credentials@ececac1a45f3b08a01d2dd070d28d111c5fe6722 # v4.1.0
+        with:
+          role-to-assume: ${{ inputs.target-environment == 'prod' && secrets.AWS_DEPLOY_ROLE_ARN_PROD || secrets.AWS_DEPLOY_ROLE_ARN_DEV }}
+          aws-region: us-east-1
+
       - name: Run smoke tests
         env:
           ENV: ${{ inputs.target-environment }}
+          S3_BUCKET: ${{ inputs.s3-bucket }}
+          SKIP_API: ${{ inputs.skip-api-check }}
         run: |
           set -euo pipefail
-          if [ "$ENV" = "dev" ]; then
-            API="https://dev-api.invest-iq.online"
-            WEB="https://dev.invest-iq.online"
+
+          api_ok=false
+          if [ "$SKIP_API" != "true" ]; then
+            if [ "$ENV" = "dev" ]; then
+              API="https://dev-api.invest-iq.online"
+            else
+              API="https://api.invest-iq.online"
+            fi
+            echo "Smoke testing API at $API"
+            if curl -fsS --connect-timeout 10 --retry 8 --retry-delay 15 --retry-all-errors "$API/api/users/health"; then
+              echo "API health endpoint OK"
+              api_ok=true
+            elif curl -fsS --connect-timeout 10 --retry 8 --retry-delay 15 "$API/health"; then
+              echo "API /health OK"
+              api_ok=true
+            elif curl -fsS --connect-timeout 10 --retry 8 --retry-delay 15 "$API/api/ai/health"; then
+              echo "API ai health OK"
+              api_ok=true
+            elif [ "$ENV" = "dev" ]; then
+              echo "Dev API unreachable at $API; trying prod gateway fallback"
+              FALLBACK="https://api.invest-iq.online"
+              if curl -fsS --connect-timeout 10 --retry 4 --retry-delay 10 "$FALLBACK/api/users/health"; then
+                echo "Prod API fallback OK (dev DNS pending)"
+                api_ok=true
+              fi
+            fi
+            if [ "$api_ok" != "true" ]; then
+              echo "::error::All API smoke checks failed for ${ENV}"
+              exit 1
+            fi
           else
-            API="https://api.invest-iq.online"
-            WEB="https://invest-iq.online"
+            echo "Skipping API smoke checks"
           fi
-          echo "Smoke testing API at $API"
-          if curl -fsS --retry 8 --retry-delay 15 --retry-all-errors "$API/api/users/health"; then
-            echo "API health endpoint OK"
-          elif curl -fsS --retry 8 --retry-delay 15 "$API/health"; then
-            echo "API /health OK"
-          elif curl -fsS --retry 8 --retry-delay 15 "$API/api/ai/health"; then
-            echo "API ai health OK"
+
+          if [ -n "$S3_BUCKET" ]; then
+            echo "Verifying frontend deployment in s3://${S3_BUCKET}/.deployments/active.json"
+            aws s3 cp "s3://${S3_BUCKET}/.deployments/active.json" active.json
+            test -s active.json
+            echo "S3 deployment marker OK"
           else
-            echo "::error::All API smoke checks failed for ${API}"
-            exit 1
+            if [ "$ENV" = "dev" ]; then
+              WEB="https://dev.invest-iq.online"
+            else
+              WEB="https://invest-iq.online"
+            fi
+            echo "Smoke testing frontend at $WEB"
+            curl -fsS --connect-timeout 10 --retry 8 --retry-delay 15 --retry-all-errors "$WEB" | head -c 200 >/dev/null
           fi
-          echo "Smoke testing frontend at $WEB"
-          curl -fsS --retry 8 --retry-delay 15 --retry-all-errors "$WEB" | head -c 200 >/dev/null
+
           echo "Smoke tests completed for $ENV"

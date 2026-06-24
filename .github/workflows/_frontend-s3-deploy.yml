@@ -69,6 +69,7 @@ jobs:
           aws s3 cp deployment.json "s3://${BUCKET}/.deployments/active.json"
 
       - name: Invalidate CloudFront cache
+        if: inputs.cloudfront-distribution-id != 'PLACEHOLDER' && inputs.cloudfront-distribution-id != ''
         run: |
           aws cloudfront create-invalidation \
             --distribution-id "${{ inputs.cloudfront-distribution-id }}" \
