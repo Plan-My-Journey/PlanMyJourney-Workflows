@@ -41,25 +41,24 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           PROJECT: ${{ inputs.sonar-project-key }}
-          ORG: ${{ inputs.sonar-organization }}
         run: |
           set -euo pipefail
           curl -sf -u "${SONAR_TOKEN}:" \
             "https://sonarcloud.io/api/authentication/validate" >/dev/null
+          echo "Making project public (required for free SonarCloud analysis)..."
           curl -sf -X POST -u "${SONAR_TOKEN}:" \
-            "https://sonarcloud.io/api/projects/update_visibility?project=${PROJECT}&visibility=public" \
-            || true
+            "https://sonarcloud.io/api/projects/update_visibility?project=${PROJECT}&visibility=public"
           if curl -sf -u "${SONAR_TOKEN}:" \
             "https://sonarcloud.io/api/project_branches/list?project=${PROJECT}" \
             | grep -q '"name":"master"'; then
+            echo "Renaming SonarCloud branch master -> main..."
             curl -sf -X POST -u "${SONAR_TOKEN}:" \
-              "https://sonarcloud.io/api/project_branches/rename?project=${PROJECT}&name=master&newName=main" \
-              || true
+              "https://sonarcloud.io/api/project_branches/rename?project=${PROJECT}&name=master&newName=main"
           fi
           curl -sf -X POST -u "${SONAR_TOKEN}:" \
             "https://sonarcloud.io/api/project_branches/set_main_branch?project=${PROJECT}&branch=main" \
-            || true
-          echo "SonarCloud project ready (public, main branch)."
+            || echo "Main branch will be set after first main analysis."
+          echo "SonarCloud project ready."
 
       - name: SonarCloud Scan
         id: scan
@@ -74,6 +73,7 @@ jobs:
             -Dsonar.sources=${{ inputs.service-path }}
             -Dsonar.python.version=3.12
             -Dsonar.branch.name=${{ github.ref_name }}
+            -Dsonar.branch.target=main
             -Dsonar.newCode.referenceBranch=main
             -Dsonar.qualitygate.wait=true
             -Dsonar.exclusions=**/tests/**,**/__pycache__/**,**/.venv/**,**/node_modules/**
