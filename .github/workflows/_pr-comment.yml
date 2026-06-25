@@ -6,27 +6,19 @@ on:
       service-name:
         required: true
         type: string
-      lint:
-        required: true
-        type: string
       sast:
+        description: "Result of the SAST job (success/failure/skipped/cancelled)"
         required: true
         type: string
       sca:
+        description: "Result of the SCA job; pass 'skipped' for services without SCA"
         required: false
-        default: skipped
+        default: "skipped"
         type: string
       trivy:
+        description: "Result of the image build + Trivy job; pass 'skipped' for services with no image"
         required: false
-        default: skipped
-        type: string
-      quality-gate:
-        required: false
-        default: skipped
-        type: string
-      sonar-quality-gate:
-        required: false
-        default: unknown
+        default: "skipped"
         type: string
 
 jobs:
@@ -36,53 +28,50 @@ jobs:
     permissions:
       pull-requests: write
     steps:
-      - uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+      - name: Upsert sticky comment
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         env:
           SVC: ${{ inputs.service-name }}
-          LINT: ${{ inputs.lint }}
           SAST: ${{ inputs.sast }}
           SCA: ${{ inputs.sca }}
           TRIVY: ${{ inputs.trivy }}
-          QG: ${{ inputs.quality-gate }}
-          SONAR_QG: ${{ inputs.sonar-quality-gate }}
         with:
           script: |
             const icon = (r) =>
-              r === 'success' || r === 'passed' ? '✅'
+              r === 'success' ? '✅'
               : r === 'skipped' ? '⏭️'
               : r === 'cancelled' ? '🚫'
               : '❌';
+
             const svc = process.env.SVC;
-            const rows = [
-              ['SAST (SonarCloud)', process.env.SAST],
-              ['SonarCloud Quality Gate', process.env.SONAR_QG],
-              ['SCA (Snyk High/Critical)', process.env.SCA],
-              ['Quality Gate', process.env.QG],
-            ];
-            if (process.env.LINT !== 'skipped') {
-              rows.unshift(['Lint + Gitleaks', process.env.LINT]);
-            }
-            if (process.env.TRIVY !== 'skipped') {
-              rows.push(['Docker build + Trivy', process.env.TRIVY]);
-            }
-            const allOk = rows.every(([, r]) => r === 'success' || r === 'passed' || r === 'skipped');
+            const sast = process.env.SAST;
+            const sca = process.env.SCA;
+            const trivy = process.env.TRIVY;
+
+            const allOk = [sast, trivy, sca]
+              .every(r => r === 'success' || r === 'skipped');
+
             const marker = `<!-- ci-validation:${svc} -->`;
             const body = [
               marker,
-              `### CI validation — \`${svc}\``,
-              '',
+              `### 🔎 CI validation — \`${svc}\``,
+              ``,
               `**Overall:** ${allOk ? '✅ passed' : '❌ failed'}`,
-              '',
-              '| Check | Result |',
-              '| --- | --- |',
-              ...rows.map(([n, r]) => `| ${n} | ${icon(r)} ${r} |`),
-              '',
-              '_Dev deployment runs only after merge to `dev`. Production releases are manual via `release.yml`._',
+              ``,
+              `| Check | Result |`,
+              `| --- | --- |`,
+              `| SAST (SonarCloud) | ${icon(sast)} ${sast} |`,
+              `| SCA (Snyk) | ${icon(sca)} ${sca} |`,
+              `| Image build + Trivy | ${icon(trivy)} ${trivy} |`,
+              ``,
+              `_Dev deployment runs on merge to \`dev\`. Production releases are manual via \`workflow_dispatch\` on this workflow._`,
             ].join('\n');
+
             const { owner, repo } = context.repo;
             const issue_number = context.issue.number;
             const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number });
             const existing = comments.find(c => c.body && c.body.includes(marker));
+
             if (existing) {
               await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
             } else {

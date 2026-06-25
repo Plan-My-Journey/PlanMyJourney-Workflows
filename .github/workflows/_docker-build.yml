@@ -28,6 +28,11 @@ jobs:
         run: |
           curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
 
+      - name: Trivy report (informational)
+        continue-on-error: true
+        run: |
+          trivy image --severity HIGH,CRITICAL --no-progress --scanners vuln "${{ inputs.service-name }}:ci"
+
       - name: Trivy security gate (fixable CRITICAL)
         run: |
           trivy image \
