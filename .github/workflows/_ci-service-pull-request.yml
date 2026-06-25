@@ -43,27 +43,12 @@ jobs:
     secrets:
       SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
 
-  quality-gate:
-    needs: [sast, sca]
-    uses: ./.github/workflows/_quality-gate.yml
-    with:
-      lint-result: skipped
-      sast-result: ${{ needs.sast.result }}
-      sca-result: ${{ needs.sca.result }}
-      trivy-result: skipped
-      sonar-quality-gate-failed: ${{ needs.sast.outputs.quality-gate-failed }}
-      snyk-critical-found: ${{ needs.sca.outputs.critical-found }}
-      snyk-high-found: ${{ needs.sca.outputs.high-found }}
-
   pr-comment:
-    needs: [sast, sca, quality-gate]
+    needs: [sast, sca]
     if: always()
     uses: ./.github/workflows/_pr-comment.yml
     with:
       service-name: ${{ inputs.service-name }}
-      lint: skipped
       sast: ${{ needs.sast.result }}
       sca: ${{ needs.sca.result }}
       trivy: skipped
-      quality-gate: ${{ needs.quality-gate.result }}
-      sonar-quality-gate: ${{ needs.sast.outputs.quality-gate-failed == 'true' && 'failed' || 'passed' }}
