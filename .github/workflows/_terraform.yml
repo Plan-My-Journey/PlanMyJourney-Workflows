@@ -18,8 +18,10 @@ on:
         default: .
         type: string
     secrets:
+      # Optional: only referenced when environment != production. Prod-only callers
+      # need not pass it. (Dev is GitOps-managed, not Terraform, in this project.)
       AWS_DEPLOY_ROLE_ARN_DEV:
-        required: true
+        required: false
       AWS_DEPLOY_ROLE_ARN_PROD:
         required: true
 
