@@ -24,7 +24,9 @@ on:
         required: true
 
 env:
-  TF_VERSION: "1.7.4"
+  # >= 1.10 required for S3 native state locking (backend `use_lockfile`), and the
+  # state was last written by 1.15.4 — CI must not be older than the writer.
+  TF_VERSION: "1.15.4"
 
 jobs:
   plan:
