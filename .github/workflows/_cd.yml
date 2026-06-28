@@ -112,5 +112,5 @@ jobs:
           GH_TOKEN: ${{ secrets.GITOPS_PAT }}
           PR: ${{ steps.cpr.outputs.pull-request-number }}
         run: |
-          gh pr merge "$PR" --merge --repo "${{ inputs.gitops-repo }}"
-          echo "Auto-merged DEV deploy PR #$PR"
+          gh pr merge "$PR" --merge --delete-branch --repo "${{ inputs.gitops-repo }}"
+          echo "Auto-merged and deleted branch for DEV deploy PR #$PR"
