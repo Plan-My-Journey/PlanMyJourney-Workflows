@@ -42,7 +42,7 @@ jobs:
           EXTRA: ${{ inputs.additional-apps }}
           DEPLOY_ENV: ${{ inputs.deploy-environment }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
           if [ -z "$ARGOCD_AUTH_TOKEN" ]; then
             if [ "$DEPLOY_ENV" = "dev" ]; then
               echo "::warning::ARGOCD_AUTH_TOKEN is not set — skipping explicit ArgoCD sync."
@@ -52,17 +52,28 @@ jobs:
             echo "::error::ARGOCD_AUTH_TOKEN is required for prod ArgoCD sync"
             exit 1
           fi
-          argocd login "$ARGOCD_SERVER" \
-            --auth-token "$ARGOCD_AUTH_TOKEN" \
-            --grpc-web \
-            --insecure
-          APPS="$PRIMARY"
-          if [ -n "$EXTRA" ]; then
-            APPS="$APPS $(echo "$EXTRA" | tr ',' ' ')"
+          # Best-effort forced sync. CI commits to GitOps and ArgoCD's automated
+          # selfHeal reconciles regardless, so a CLI connectivity issue (e.g. gRPC
+          # through the NLB) must NOT fail the deploy. We try an immediate sync and
+          # warn if the CLI cannot reach the server.
+          sync_ok=true
+          if ! timeout 60 argocd login "$ARGOCD_SERVER" \
+                --auth-token "$ARGOCD_AUTH_TOKEN" --grpc-web --insecure; then
+            sync_ok=false
           fi
-          for app in $APPS; do
-            echo "Syncing $app (${{ inputs.deploy-environment }}) ..."
-            argocd app sync "$app" --async || argocd app sync "$app"
-            argocd app wait "$app" --health --timeout 600 || true
-          done
-          echo "ArgoCD sync completed."
+          if [ "$sync_ok" = "true" ]; then
+            APPS="$PRIMARY"
+            if [ -n "$EXTRA" ]; then
+              APPS="$APPS $(echo "$EXTRA" | tr ',' ' ')"
+            fi
+            for app in $APPS; do
+              echo "Syncing $app (${DEPLOY_ENV}) ..."
+              argocd app sync "$app" --grpc-web --async || argocd app sync "$app" --grpc-web || sync_ok=false
+              argocd app wait "$app" --grpc-web --health --timeout 600 || true
+            done
+          fi
+          if [ "$sync_ok" = "true" ]; then
+            echo "ArgoCD explicit sync completed."
+          else
+            echo "::warning::Explicit ArgoCD sync could not reach ${ARGOCD_SERVER}; relying on ArgoCD automated selfHeal to reconcile ${DEPLOY_ENV}."
+          fi
